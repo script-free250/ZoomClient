@@ -1,0 +1,28 @@
+name: Build Minecraft Client
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Setup MSVC
+      uses: ilammy/msvc-dev-cmd@v1
+
+    - name: Configure CMake
+      run: cmake -B build -G "NMake Makefiles"
+
+    - name: Build DLL
+      run: cmake --build build --config Release
+
+    - name: Upload DLL
+      uses: actions/upload-artifact@v3
+      with:
+        name: ZoomClient_DLL
+        path: build/ZoomClient.dll
