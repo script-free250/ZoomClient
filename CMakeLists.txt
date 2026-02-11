@@ -4,6 +4,9 @@ project(ZoomClient)
 
 set(CMAKE_CXX_STANDARD 20)
 
+# إخبار المترجم باستخدام Unicode
+add_definitions(-DUNICODE -D_UNICODE)
+
 # إضافة ملف الكود الرئيسي
 add_library(ZoomClient SHARED main.cpp)
 
