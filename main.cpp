@@ -1,63 +1,78 @@
 #include <windows.h>
-#include <iostream>
 #include <vector>
+#include <iostream>
 
-// ==========================================
-// الأوفستات (ستحتاج لتحديثها لاحقاً)
-// ==========================================
-uintptr_t FOV_OFFSET = 0x0; 
+// =============================================================
+// [!] هام جداً: هذه القيم تتغير مع كل تحديث للعبة!
+// يجب عليك استبدالها بالقيم التي ستجدها ببرنامج Cheat Engine
+// =============================================================
 
-// ==========================================
+// هذا هو "عنوان الأساس" للـ Pointer Chain الخاص بالـ FOV
+// مثال: 0x056ABCDE (هذا رقم عشوائي للشرح فقط)
+uintptr_t FOV_POINTER_BASE_OFFSET = 0x0; 
 
-void MainThread(HMODULE hModule) {
-    // 1. إظهار رسالة ترحيب أول ما الكلاينت يتحقن
-    // المعاملات: (المقبض، نص الرسالة، عنوان النافذة، نوع الزرار والأيقونة)
-    MessageBoxW(NULL, L"Welcome to ZoomClient!", L"ZoomClient Info", MB_OK | MB_ICONINFORMATION);
+// هذه هي القفزات (Offsets) للوصول لقيمة الـ FOV النهائية
+// مثال: { 0x10, 0x48, 0x100 }
+std::vector<unsigned int> FOV_OFFSETS = { 0x0, 0x0 }; 
 
-    // 2. فتح شاشة الكونسول السوداء
-    AllocConsole();
-    FILE* f;
-    freopen_s(&f, "CONOUT$", "w", stdout);
+// القيم التي نريدها
+const float ZOOM_FOV = 30.0f;  // الزووم
+float ORIGINAL_FOV = 70.0f;    // القيمة الأصلية (سنحاول قراءتها من اللعبة)
 
-    std::cout << "====================================" << std::endl;
-    std::cout << "        ZoomClient Loaded!          " << std::endl;
-    std::cout << "====================================" << std::endl;
-    std::cout << "[+] Press 'C' to Zoom." << std::endl;
-    std::cout << "[+] Press 'END' to Eject." << std::endl;
+// =============================================================
 
-    uintptr_t moduleBase = (uintptr_t)GetModuleHandleW(L"Minecraft.Windows.exe");
+// دالة مساعدة لقراءة العنوان من الذاكرة بناءً على الـ Offsets
+uintptr_t FindDMAAddy(uintptr_t ptr, std::vector<unsigned int> offsets) {
+    uintptr_t addr = ptr;
+    for (unsigned int i = 0; i < offsets.size(); ++i) {
+        if (IsBadReadPtr((void*)addr, sizeof(uintptr_t))) return 0; // حماية من الكراش
+        
+        addr = *(uintptr_t*)addr; // اقرأ العنوان الذي يشير إليه
+        if (addr == 0) return 0;  // عنوان غير صالح
 
-    float defaultFov = 70.0f;
-    float zoomFov = 30.0f;
-    bool isZooming = false;
-
-    while (!GetAsyncKeyState(VK_END)) {
-        if (GetAsyncKeyState('C')) {
-            if (!isZooming) {
-                std::cout << "[!] Zoom Activated!" << std::endl;
-                isZooming = true;
-            }
-        } else {
-            if (isZooming) {
-                std::cout << "[!] Zoom Deactivated!" << std::endl;
-                isZooming = false;
-            }
-        }
-        Sleep(10);
+        addr += offsets[i]; // أضف الـ Offset التالي
     }
-
-    // تنظيف الخروج
-    std::cout << "Unloading..." << std::endl;
-    fclose(f);
-    FreeConsole();
-    FreeLibraryAndExitThread(hModule, 0);
+    return addr;
 }
 
+// الكود الرئيسي الذي سيعمل في الخلفية
+DWORD WINAPI MainThread(LPVOID lpParam) {
+    // 1. الحصول على عنوان اللعبة في الذاكرة (Minecraft.Windows.exe)
+    uintptr_t moduleBase = (uintptr_t)GetModuleHandle(L"Minecraft.Windows.exe");
+
+    // حلقة تكرار لا نهائية
+    while (true) {
+        // تأكد من أننا نملك Offsets صحيحة قبل المحاولة
+        if (FOV_POINTER_BASE_OFFSET != 0) {
+            // حساب العنوان النهائي للـ FOV
+            uintptr_t fovAddr = FindDMAAddy(moduleBase + FOV_POINTER_BASE_OFFSET, FOV_OFFSETS);
+
+            if (fovAddr != 0) {
+                // إذا ضغط المستخدم على زر C (الرمز 0x43)
+                if (GetAsyncKeyState(0x43) & 0x8000) {
+                    // اكتب قيمة الزووم
+                    *(float*)fovAddr = ZOOM_FOV;
+                } else {
+                    // ارجع للقيمة الأصلية (يمكنك تحسين هذا لقراءة القيمة من الإعدادات)
+                    // هنا سنفترض أن القيمة الطبيعية هي 70 أو نعيد القيمة التي قرأناها
+                    *(float*)fovAddr = ORIGINAL_FOV;
+                }
+            }
+        }
+        
+        [...](asc_slot://start-slot-3)// تقليل استهلاك المعالج
+        Sleep(10); 
+    }
+    return 0;
+}
+
+// نقطة دخول الـ DLL
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD  ul_reason_for_call, LPVOID lpReserved) {
     switch (ul_reason_for_call) {
     case DLL_PROCESS_ATTACH:
-        // تشغيل الكود في Thread منفصل عشان اللعبة متقفش
-        CloseHandle(CreateThread(nullptr, 0, (LPTHREAD_START_ROUTINE)MainThread, hModule, 0, nullptr));
+        // تشغيل الكود في Thread منفصل لكي لا تجمد اللعبة
+        CreateThread(nullptr, 0, MainThread, hModule, 0, nullptr);
+        break;
     case DLL_THREAD_ATTACH:
     case DLL_THREAD_DETACH:
     case DLL_PROCESS_DETACH:
