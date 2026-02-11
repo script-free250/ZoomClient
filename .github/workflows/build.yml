@@ -1,4 +1,4 @@
-name: Build Minecraft Client
+name: Build Minecraft Client DLL
 
 on:
   push:
@@ -10,22 +10,17 @@ jobs:
     runs-on: windows-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v3
 
-    - name: Setup MSVC
-      uses: ilammy/msvc-dev-cmd@v1
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v1.1
 
-    # إعداد CMake
-    - name: Configure CMake
-      run: cmake -B build -G "NMake Makefiles"
+    - name: Compile DLL
+      run: |
+        cl.exe /EHsc /D_USRDLL /D_WINDLL main.cpp /link /DLL /OUT:ZoomClient.dll
 
-    # بناء المشروع (توليد ملف الـ DLL)
-    - name: Build DLL
-      run: cmake --build build --config Release
-
-    # رفع الملف عشان تقدر تحمله (التعديل هنا)
     - name: Upload DLL
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v3
       with:
-        name: ZoomClient_DLL
-        path: build/ZoomClient.dll
+        name: ZoomClient-DLL
+        path: ZoomClient.dll
