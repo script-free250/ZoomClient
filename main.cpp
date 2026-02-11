@@ -35,8 +35,7 @@ void MainThread(HMODULE hModule) {
     std::cout << "[+] Press 'END' to Eject." << std::endl;
 
     // الحصول على عنوان اللعبة الأساسي
-    uintptr_t moduleBase = (uintptr_t)GetModuleHandle(L"Minecraft.Windows.exe");
-
+uintptr_t moduleBase = (uintptr_t)GetModuleHandleW(L"Minecraft.Windows.exe");
     // القيم الخاصة بالزوم
     float defaultFov = 70.0f; // الوضع الطبيعي
     float zoomFov = 30.0f;    // وضع الزوم
