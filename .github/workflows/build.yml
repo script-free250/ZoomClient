@@ -6,35 +6,29 @@ on:
       - main  # Or your default branch
 
 jobs:
-  build:
+  build-windows:
     runs-on: windows-latest
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v3
 
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.10'
+        python-version: '3.9' # Specify your Python version
 
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install customtkinter pyinstaller
 
-    - name: Get customtkinter path
-      id: customtkinter-path
+    - name: Build executable with PyInstaller
       run: |
-        echo "CUSTOMTKINTER_PATH=$(python -c "import os, customtkinter; print(os.path.dirname(customtkinter.__file__))")" >> $GITHUB_ENV
-      shell: bash
+        pyinstaller --name="DailyTasks" --onefile --windowed --add-data="C:/Users/runneradmin/AppData/Local/Programs/Python/Python39/Lib/site-packages/customtkinter;customtkinter/" tasks.py
 
-    - name: Package application with PyInstaller
-      run: |
-        pyinstaller --name "DailyTasks" --onefile --windowed --add-data "${{ env.CUSTOMTKINTER_PATH }};customtkinter/" app.py
-
-    - name: Upload executable artifact
-      uses: actions/upload-artifact@v4
+    - name: Upload artifact
+      uses: actions/upload-artifact@v3
       with:
         name: DailyTasks-Executable
         path: dist/DailyTasks.exe
