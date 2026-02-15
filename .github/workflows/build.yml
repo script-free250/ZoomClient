@@ -11,10 +11,10 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4  # Updated to v4 for consistency
 
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5 # Updated to v5 for consistency
       with:
         python-version: '3.9' # Specify your Python version
 
@@ -28,7 +28,7 @@ jobs:
         pyinstaller --name="DailyTasks" --onefile --windowed --add-data="C:/Users/runneradmin/AppData/Local/Programs/Python/Python39/Lib/site-packages/customtkinter;customtkinter/" tasks.py
 
     - name: Upload artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4 # <-- This is the corrected line
       with:
         name: DailyTasks-Executable
         path: dist/DailyTasks.exe
