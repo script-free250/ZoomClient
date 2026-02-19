@@ -40,7 +40,7 @@ class mmmxApp(ctk.CTk):
             self.app_icon_large = None; self.app_icon_small = None
 
         self.setup_login_screen()
-        self.after(500, self.fade_in)
+        self.after(200, self.fade_in, 0.0) # Start fade in
         
         self.source_path = ""; self.locked_file = ""; self.key_file = ""; self.operation_result = None; self.live_edit_temp_path = None
 
@@ -54,26 +54,12 @@ class mmmxApp(ctk.CTk):
         self.login_button = ctk.CTkButton(self.login_frame, text="UNLOCK", height=45, width=300, font=ctk.CTkFont(size=18, weight="bold"), fg_color=THEME_COLOR, hover_color=HOVER_COLOR, command=self.check_login)
         self.error_label_login = ctk.CTkLabel(self.login_frame, text="", text_color="#FF4D4D")
         
-        # Animation
-        self.icon_label.place(relx=0.5, rely=-0.5, anchor="center")
-        self.title_label.place(relx=0.5, rely=1.5, anchor="center")
-        self.password_entry_login.place(relx=0.5, rely=1.5, anchor="center")
-        self.login_button.place(relx=0.5, rely=1.5, anchor="center")
-        self.error_label_login.place(relx=0.5, rely=1.5, anchor="center")
-
-        self.animate_login_entry()
-
-    def animate_login_entry(self, step=0):
-        if step <= 10:
-            rely_icon = -0.5 + (0.7 * (step / 10))
-            self.icon_label.place(relx=0.5, rely=rely_icon, anchor="center")
-            self.after(20, lambda: self.animate_login_entry(step + 1))
-        elif step == 11:
-            self.title_label.place(relx=0.5, rely=0.35, anchor="center")
-            self.password_entry_login.place(relx=0.5, rely=0.5, anchor="center")
-            self.login_button.place(relx=0.5, rely=0.6, anchor="center")
-            self.error_label_login.place(relx=0.5, rely=0.68, anchor="center")
-            self.password_entry_login.bind("<Return>", self.check_login)
+        self.icon_label.pack(pady=(150, 20))
+        self.title_label.pack(pady=10)
+        self.password_entry_login.pack(pady=20)
+        self.login_button.pack(pady=10)
+        self.error_label_login.pack(pady=10)
+        self.password_entry_login.bind("<Return>", self.check_login)
 
     def check_login(self, event=None):
         if self.password_entry_login.get() == APP_PASSWORD:
@@ -85,13 +71,14 @@ class mmmxApp(ctk.CTk):
     def fade_out_and_setup_main_ui(self, alpha=1.0):
         if alpha > 0:
             alpha -= 0.1
-            self.login_frame.attributes('-alpha', alpha)
-            self.after(20, lambda: self.fade_out_and_setup_main_ui(alpha))
+            self.attributes('-alpha', alpha)
+            self.after(25, lambda: self.fade_out_and_setup_main_ui(alpha))
         else:
-            self.login_frame.destroy()
+            for widget in self.winfo_children():
+                widget.destroy()
             self.setup_main_ui()
-            self.attributes('-alpha', 1.0)
-    
+            self.fade_in(0.0)
+
     def setup_main_ui(self):
         self.grid_columnconfigure(1, weight=1); self.grid_rowconfigure(0, weight=1)
         self.sidebar_frame = ctk.CTkFrame(self, width=220, fg_color=BG_COLOR, corner_radius=0)
@@ -177,17 +164,24 @@ class mmmxApp(ctk.CTk):
         try: base_path = sys._MEIPASS
         except Exception: base_path = os.path.abspath(".")
         return os.path.join(base_path, relative_path)
-    def fade_in(self):
-        alpha = self.attributes('-alpha')
-        if alpha < 1: alpha += 0.1; self.attributes('-alpha', alpha); self.after(20, self.fade_in)
-    def update_status(self, text): self.status_label.configure(text=text)
+    def fade_in(self, alpha=0.0):
+        if alpha < 1:
+            alpha += 0.05
+            self.attributes('-alpha', alpha)
+            self.after(15, lambda: self.fade_in(alpha))
+    def update_status(self, text):
+        if self.status_label.winfo_exists(): self.status_label.configure(text=text)
     def toggle_ui_state(self, state="disabled"):
         buttons = [self.encrypt_button, self.decrypt_button, self.live_edit_button]
         for btn in buttons:
             if btn and btn.winfo_exists(): btn.configure(state=state)
-        if self.tabview and self.tabview.winfo_exists(): self.tabview.configure(state=state)
-        if state == "disabled": self.progress_bar.grid(row=7, column=0, padx=20, pady=10, sticky="sew"); self.progress_bar.start()
-        else: self.progress_bar.stop(); self.progress_bar.grid_forget()
+        if hasattr(self, 'tabview') and self.tabview.winfo_exists(): self.tabview.configure(state=state)
+        if state == "disabled":
+            if hasattr(self, 'progress_bar') and self.progress_bar.winfo_exists():
+                self.progress_bar.grid(row=7, column=0, padx=20, pady=10, sticky="sew"); self.progress_bar.start()
+        else:
+            if hasattr(self, 'progress_bar') and self.progress_bar.winfo_exists():
+                self.progress_bar.stop(); self.progress_bar.grid_forget()
 
     def select_path_to_encrypt(self):
         path = filedialog.askdirectory(title="اختر مجلدًا") or filedialog.askopenfilename(title="أو اختر ملفًا واحدًا")
