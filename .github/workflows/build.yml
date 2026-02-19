@@ -8,27 +8,15 @@ on:
 jobs:
   build:
     runs-on: windows-latest
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
-
-      - name: Install dependencies
-        run: |
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
+        with: { python-version: '3.10' }
+      - run: |
           python -m pip install --upgrade pip
           pip install pyinstaller customtkinter cryptography
-
-      # --- بناء البرنامج مع تضمين الأيقونة بالطريقة الصحيحة ---
-      - name: Build executable with PyInstaller
-        run: pyinstaller --name "AegisCrypt" --onefile --windowed --add-data "icon.ico;." AegisCrypt.py
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - run: pyinstaller --name "Aegis" --onefile --windowed --add-data "icon.ico;." AegisApp.py
+      - uses: actions/upload-artifact@v4
         with:
-          name: AegisCrypt-Executable
-          path: dist/AegisCrypt.exe
+          name: Aegis-Executable
+          path: dist/Aegis.exe
