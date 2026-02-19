@@ -1,5 +1,5 @@
 # اسم سير العمل الذي سيظهر في علامة تبويب "Actions" في GitHub
-name: Build NOVA Executable
+name: Build mmmx Executable
 
 on:
   push:
@@ -18,17 +18,16 @@ jobs:
         with:
           python-version: '3.10'
 
-      # --- التحديث المهم: إضافة مكتبة Pillow ---
-      - name: Install dependencies
+      - name: Install dependencies (including Pillow for images)
         run: |
           python -m pip install --upgrade pip
           pip install pyinstaller customtkinter cryptography Pillow
 
       - name: Build executable with PyInstaller
-        run: pyinstaller --name "NOVA" --onefile --windowed --add-data "icon.ico;." NovaApp.py
+        run: pyinstaller --name "mmmx" --onefile --windowed --add-data "icon.ico;." mmmxApp.py
 
-      - name: Upload NOVA Executable
+      - name: Upload mmmx Executable
         uses: actions/upload-artifact@v4
         with:
-          name: NOVA-Executable
-          path: dist/NOVA.exe
+          name: mmmx-Executable
+          path: dist/mmmx.exe
