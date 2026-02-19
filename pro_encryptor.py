@@ -7,73 +7,69 @@ from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
+# --- تعريف أنواع التشفير ---
+MODE_PASSWORD_ONLY = b'\x01'
+MODE_PASSWORD_AND_KEY = b'\x02'
+
 # --- إعدادات الواجهة ---
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("green")
 
-class ProEncryptorApp(ctk.CTk):
+class FinalEncryptorApp(ctk.CTk):
     def __init__(self):
         super().__init__()
-
-        self.title("FileFortress - تشفير المجلدات الاحترافي")
-        self.geometry("600x450")
+        self.title("FileFortress - التشفير النهائي")
+        self.geometry("600x500")
 
         self.header_label = ctk.CTkLabel(self, text="FileFortress", font=ctk.CTkFont(size=24, weight="bold"))
         self.header_label.pack(pady=10)
 
-        self.tabview = ctk.CTkTabview(self, width=580, height=380)
+        self.tabview = ctk.CTkTabview(self, width=580, height=420)
         self.tabview.pack(padx=10, pady=5)
-
-        self.encrypt_tab = self.tabview.add("🔒 تشفير مجلد")
-        self.decrypt_tab = self.tabview.add("🔑 فك تشفير مجلد")
+        self.encrypt_tab = self.tabview.add("🔒 تشفير")
+        self.decrypt_tab = self.tabview.add("🔑 فك تشفير")
 
         self.setup_encrypt_tab()
         self.setup_decrypt_tab()
         
-        # متغيرات لحفظ المسارات
         self.source_folder = ""
         self.locked_file = ""
         self.key_file = ""
+        self.decryption_mode = None
 
-    # --- إعداد واجهة التشفير ---
     def setup_encrypt_tab(self):
-        # زر اختيار المجلد
         self.select_folder_button = ctk.CTkButton(self.encrypt_tab, text="1. اختر المجلد المراد تشفيره", command=self.select_folder_to_encrypt)
         self.select_folder_button.pack(pady=15, padx=20, fill="x")
         self.folder_label = ctk.CTkLabel(self.encrypt_tab, text="لم يتم اختيار أي مجلد", text_color="gray")
         self.folder_label.pack(pady=5)
 
-        # حقل كلمة المرور
         self.password_entry_encrypt = ctk.CTkEntry(self.encrypt_tab, placeholder_text="2. أدخل كلمة مرور قوية", show="*")
         self.password_entry_encrypt.pack(pady=15, padx=20, fill="x")
-        
-        # زر بدء التشفير
+
+        self.use_keyfile_check = ctk.CTkCheckBox(self.encrypt_tab, text="استخدام أمان إضافي (كلمة مرور + ملف مفتاح)")
+        self.use_keyfile_check.pack(pady=10, padx=20)
+        self.use_keyfile_check.select() # تفعيل الخيار افتراضيًا
+
         self.encrypt_button = ctk.CTkButton(self.encrypt_tab, text="🔒 ابدأ التشفير الآن", height=40, command=self.encrypt_folder_action)
         self.encrypt_button.pack(pady=20, padx=20, fill="x")
 
-    # --- إعداد واجهة فك التشفير ---
     def setup_decrypt_tab(self):
-        # زر اختيار الملف المشفر
         self.select_file_button = ctk.CTkButton(self.decrypt_tab, text="1. اختر الملف المشفر (.locked)", command=self.select_file_to_decrypt)
         self.select_file_button.pack(pady=10, padx=20, fill="x")
         self.locked_file_label = ctk.CTkLabel(self.decrypt_tab, text="لم يتم اختيار ملف", text_color="gray")
         self.locked_file_label.pack(pady=(0, 10))
 
-        # زر اختيار ملف المفتاح
         self.select_key_button = ctk.CTkButton(self.decrypt_tab, text="2. اختر ملف المفتاح (.key)", command=self.select_key_file)
         self.select_key_button.pack(pady=10, padx=20, fill="x")
         self.key_file_label = ctk.CTkLabel(self.decrypt_tab, text="لم يتم اختيار مفتاح", text_color="gray")
         self.key_file_label.pack(pady=(0, 10))
 
-        # حقل كلمة المرور
         self.password_entry_decrypt = ctk.CTkEntry(self.decrypt_tab, placeholder_text="3. أدخل كلمة المرور", show="*")
         self.password_entry_decrypt.pack(pady=10, padx=20, fill="x")
         
-        # زر بدء فك التشفير
         self.decrypt_button = ctk.CTkButton(self.decrypt_tab, text="🔑 فك التشفير", height=40, command=self.decrypt_folder_action)
         self.decrypt_button.pack(pady=15, padx=20, fill="x")
 
-    # --- دوال اختيار الملفات والمجلدات ---
     def select_folder_to_encrypt(self):
         path = filedialog.askdirectory(title="اختر المجلد الذي تريد تشفيره")
         if path:
@@ -82,9 +78,26 @@ class ProEncryptorApp(ctk.CTk):
 
     def select_file_to_decrypt(self):
         path = filedialog.askopenfilename(title="اختر الملف المشفر", filetypes=[("Locked Files", "*.locked")])
-        if path:
-            self.locked_file = path
-            self.locked_file_label.configure(text=os.path.basename(path))
+        if not path: return
+        
+        self.locked_file = path
+        self.locked_file_label.configure(text=os.path.basename(path))
+        
+        # --- الذكاء في فك التشفير ---
+        with open(path, 'rb') as f:
+            mode_header = f.read(1)
+        
+        if mode_header == MODE_PASSWORD_ONLY:
+            self.decryption_mode = "password_only"
+            self.select_key_button.configure(state="disabled") # تعطيل زر المفتاح
+            self.key_file_label.configure(text="فك التشفير بكلمة المرور فقط")
+        elif mode_header == MODE_PASSWORD_AND_KEY:
+            self.decryption_mode = "password_and_key"
+            self.select_key_button.configure(state="normal") # تفعيل زر المفتاح
+            self.key_file_label.configure(text="لم يتم اختيار مفتاح")
+        else:
+            messagebox.showerror("خطأ", "ملف مشفر غير معروف أو تالف.")
+            self.decryption_mode = None
 
     def select_key_file(self):
         path = filedialog.askopenfilename(title="اختر ملف المفتاح الخاص بك", filetypes=[("Key Files", "*.key")])
@@ -92,37 +105,36 @@ class ProEncryptorApp(ctk.CTk):
             self.key_file = path
             self.key_file_label.configure(text=os.path.basename(path))
 
-    # --- دوال التشفير وفك التشفير الرئيسية ---
-    def get_encryption_key(self, password, salt, key_file_content):
-        combined_secret = password.encode() + key_file_content
-        kdf = PBKDF2HMAC(
-            algorithm=hashes.SHA256(),
-            length=32,
-            salt=salt,
-            iterations=600000,
-        )
-        return base64.urlsafe_b64encode(kdf.derive(combined_secret))
+    def get_encryption_key(self, password, salt, key_file_content=None):
+        base_secret = password.encode()
+        if key_file_content:
+            base_secret += key_file_content
+            
+        kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=600000)
+        return base64.urlsafe_b64encode(kdf.derive(base_secret))
 
     def encrypt_folder_action(self):
         if not self.source_folder or not self.password_entry_encrypt.get():
             messagebox.showerror("خطأ", "الرجاء اختيار مجلد وإدخال كلمة مرور.")
             return
-        
-        # 1. إنشاء ملف المفتاح
-        key_file_path = filedialog.asksaveasfilename(defaultextension=".key", filetypes=[("Key Files", "*.key")], title="احفظ ملف المفتاح في مكان آمن")
-        if not key_file_path:
-            messagebox.showwarning("تنبيه", "تم إلغاء عملية التشفير.")
-            return
-        
-        key_file_content = os.urandom(32) # 32 بايت من البيانات العشوائية الآمنة
-        with open(key_file_path, 'wb') as kf:
-            kf.write(key_file_content)
 
-        # 2. ضغط المجلد في ملف zip مؤقت
+        password = self.password_entry_encrypt.get()
+        use_keyfile = self.use_keyfile_check.get()
+        key_file_content = None
+        mode_header = MODE_PASSWORD_ONLY
+
+        if use_keyfile:
+            key_file_path = filedialog.asksaveasfilename(defaultextension=".key", filetypes=[("Key Files", "*.key")], title="احفظ ملف المفتاح في مكان آمن")
+            if not key_file_path:
+                messagebox.showwarning("تنبيه", "تم إلغاء عملية التشفير.")
+                return
+            key_file_content = os.urandom(32)
+            with open(key_file_path, 'wb') as kf:
+                kf.write(key_file_content)
+            mode_header = MODE_PASSWORD_AND_KEY
+        
         temp_zip_path = shutil.make_archive("temp_archive", 'zip', self.source_folder)
         
-        # 3. تشفير ملف الـ zip
-        password = self.password_entry_encrypt.get()
         salt = os.urandom(16)
         encryption_key = self.get_encryption_key(password, salt, key_file_content)
         fernet = Fernet(encryption_key)
@@ -131,54 +143,62 @@ class ProEncryptorApp(ctk.CTk):
             zip_data = f.read()
         encrypted_data = fernet.encrypt(zip_data)
         
-        # 4. حفظ الملف النهائي .locked (salt + data)
         output_path = self.source_folder + ".locked"
         with open(output_path, 'wb') as f:
+            f.write(mode_header) # كتابة نوع التشفير أولاً
             f.write(salt)
             f.write(encrypted_data)
-        
-        # 5. تنظيف الملفات المؤقتة
+            
         os.remove(temp_zip_path)
+        
+        messagebox.showinfo("نجاح!", "✅ تم تشفير المجلد بنجاح!")
+        
+        # --- سؤال الحذف التلقائي ---
+        if messagebox.askyesno("تأكيد الحذف", "هل تريد حذف المجلد الأصلي غير المشفر الآن؟\n\n🚨 تحذير: هذا الإجراء لا يمكن التراجع عنه."):
+            try:
+                shutil.rmtree(self.source_folder)
+                messagebox.showinfo("تم الحذف", "تم حذف المجلد الأصلي بنجاح.")
+            except Exception as e:
+                messagebox.showerror("خطأ أثناء الحذف", f"لم نتمكن من حذف المجلد الأصلي.\nالخطأ: {e}")
 
-        messagebox.showinfo("نجاح!", f"✅ تم تشفير المجلد بنجاح!\n\nتم حفظ الملف المشفر في:\n{output_path}\n\nتم حفظ ملف المفتاح في:\n{key_file_path}\n\n🚨 تحذير: احتفظ بملف المفتاح وكلمة المرور، بدونهما لن تتمكن من استعادة ملفاتك أبدًا!")
 
     def decrypt_folder_action(self):
-        if not self.locked_file or not self.key_file or not self.password_entry_decrypt.get():
-            messagebox.showerror("خطأ", "الرجاء اختيار الملف المشفر، ملف المفتاح، وإدخال كلمة المرور.")
+        if not self.locked_file or not self.password_entry_decrypt.get():
+            messagebox.showerror("خطأ", "الرجاء اختيار ملف وإدخال كلمة مرور.")
             return
 
-        try:
-            # 1. قراءة الملفات المطلوبة
-            password = self.password_entry_decrypt.get()
+        key_file_content = None
+        if self.decryption_mode == "password_and_key":
+            if not self.key_file:
+                messagebox.showerror("خطأ", "هذا الملف يتطلب ملف مفتاح لفك تشفيره.")
+                return
             with open(self.key_file, 'rb') as kf:
                 key_file_content = kf.read()
-            
+        
+        try:
+            password = self.password_entry_decrypt.get()
             with open(self.locked_file, 'rb') as f:
+                f.read(1) # تخطي الهيدر
                 salt = f.read(16)
                 encrypted_data = f.read()
 
-            # 2. إعادة توليد مفتاح التشفير ومحاولة فك التشفير
             encryption_key = self.get_encryption_key(password, salt, key_file_content)
             fernet = Fernet(encryption_key)
             decrypted_zip_data = fernet.decrypt(encrypted_data)
 
-            # 3. حفظ وفك ضغط ملف الـ zip
             temp_zip_path = "decrypted_temp.zip"
             with open(temp_zip_path, 'wb') as f:
                 f.write(decrypted_zip_data)
             
-            output_folder_path = self.locked_file.replace(".locked", "_decrypted")
-            shutil.unpack_archive(temp_zip_path, output_folder_path)
+            output_folder_path = self.locked_file.replace(".locked", "")
+            shutil.unpack_archive(temp_zip_path, output_folder_path, 'zip')
 
-            # 4. تنظيف
             os.remove(temp_zip_path)
             
-            messagebox.showinfo("نجاح!", f"✅ تم فك تشفير المجلد بنجاح!\n\nتم حفظ الملفات في مجلد:\n{output_folder_path}")
-
+            messagebox.showinfo("نجاح!", f"✅ تم فك تشفير المجلد بنجاح!\n\nتم حفظ الملفات في:\n{output_folder_path}")
         except Exception as e:
-            messagebox.showerror("فشل فك التشفير", "فشلت العملية. الأسباب المحتملة:\n\n- كلمة المرور غير صحيحة.\n- ملف المفتاح غير صحيح.\n- الملف المشفر تالف.")
+            messagebox.showerror("فشل فك التشفير", "فشلت العملية. الأسباب المحتملة:\n\n- كلمة المرور غير صحيحة.\n- ملف المفتاح غير صحيح (إن وجد).\n- الملف المشفر تالف.")
 
 if __name__ == "__main__":
-    app = ProEncryptorApp()
+    app = FinalEncryptorApp()
     app.mainloop()
-
