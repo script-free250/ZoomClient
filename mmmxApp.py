@@ -60,6 +60,8 @@ def secure_wipe_directory(path):
         for name in dirs:
             try:
                 os.rmdir(os.path.join(root, name))
+            except OSError as e: # <-- تم إضافة الـ except الناقصة هنا لحل المشكلة
+                print(f"Failed to remove directory {name}: {e}")
     try:
         os.rmdir(path)
     except OSError as e:
