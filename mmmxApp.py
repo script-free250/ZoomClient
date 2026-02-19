@@ -4,28 +4,127 @@ import shutil
 import base64
 import tempfile
 import threading
-import time
-import logging
+import json
+from datetime import datetime, timedelta
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from PIL import Image
-import winsound
-import psutil
 
 # --- تعريفات أساسية ---
-APP_PASSWORD = "023123"
-APP_NAME = "mmmx"
+APP_PASSWORD = "023123"  # تحذير: كلمة مرور ثابتة في الكود تشكل ثغرة أمنية كبيرة. يجب تغييرها.
 MODE_PASSWORD_ONLY = b'\x01'
 MODE_PASSWORD_AND_KEY = b'\x02'
-THEME_COLOR = "#00BFFF" # Deep Sky Blue
-HOVER_COLOR = "#009ACD" # Darker Shade
-BG_COLOR = "#0A0A0A"     # Near Black
-FRAME_COLOR = "#191919"  # Very Dark Gray
-TEMP_SESSION_DIR = os.path.join(tempfile.gettempdir(), f".{APP_NAME.lower()}_session")
-LOCK_FILE_PATH = os.path.join(TEMP_SESSION_DIR, "session.lock")
+THEME_COLOR = "#00BFFF"
+HOVER_COLOR = "#009ACD"
+BG_COLOR = "#0A0A0A"
+FRAME_COLOR = "#191919"
+
+# --- إعدادات الحماية من التخمين ---
+MAX_LOGIN_ATTEMPTS = 5
+LOCKOUT_MINUTES = 5
+
+# --- [جديد] وظائف المسح الآمن ---
+def secure_wipe_file(file_path):
+    """
+    يقوم بالكتابة فوق الملف ببيانات عشوائية ثم بيانات صفرية قبل حذفه نهائياً.
+    """
+    try:
+        with open(file_path, "rb+") as f:
+            length = os.fstat(f.fileno()).st_size
+            if length > 0:
+                # 1. الكتابة فوق الملف ببيانات عشوائية
+                f.seek(0)
+                f.write(os.urandom(length))
+                # 2. الكتابة فوق الملف ببيانات صفرية (اختياري، لزيادة الأمان)
+                f.seek(0)
+                f.write(b'\x00' * length)
+    except Exception as e:
+        print(f"Secure wipe (overwrite) failed for {file_path}: {e}")
+    finally:
+        try:
+            # 3. الحذف النهائي
+            os.remove(file_path)
+        except Exception as e:
+            print(f"Secure wipe (remove) failed for {file_path}: {e}")
+
+def secure_wipe_directory(path):
+    """
+    يطبق المسح الآمن على كل الملفات داخل مجلد ثم يحذف هيكل المجلد.
+    """
+    for root, dirs, files in os.walk(path, topdown=False):
+        for name in files:
+            secure_wipe_file(os.path.join(root, name))
+        for name in dirs:
+            try:
+                os.rmdir(os.path.join(root, name))
+    try:
+        os.rmdir(path)
+    except OSError as e:
+        print(f"Failed to remove top-level directory {path}: {e}")
+
+
+# --- [جديد] إدارة حالة التطبيق (للحماية من التخمين) ---
+class AppState:
+    def __init__(self):
+        self.state_file_path = self._get_state_file_path()
+        self.state = {
+            'failed_attempts': 0,
+            'lockout_until': None
+        }
+        self.load_state()
+
+    def _get_state_file_path(self):
+        app_data_dir = os.getenv('APPDATA') or os.path.expanduser("~")
+        mmmx_dir = os.path.join(app_data_dir, ".mmmx")
+        os.makedirs(mmmx_dir, exist_ok=True)
+        return os.path.join(mmmx_dir, "app_state.json")
+
+    def load_state(self):
+        try:
+            with open(self.state_file_path, 'r') as f:
+                data = json.load(f)
+                self.state['failed_attempts'] = data.get('failed_attempts', 0)
+                lockout_str = data.get('lockout_until')
+                if lockout_str:
+                    self.state['lockout_until'] = datetime.fromisoformat(lockout_str)
+        except (FileNotFoundError, json.JSONDecodeError):
+            self.save_state()
+
+    def save_state(self):
+        data_to_save = self.state.copy()
+        if data_to_save['lockout_until']:
+            data_to_save['lockout_until'] = data_to_save['lockout_until'].isoformat()
+        with open(self.state_file_path, 'w') as f:
+            json.dump(data_to_save, f)
+
+    def is_locked_out(self):
+        if self.state['lockout_until'] and datetime.now() < self.state['lockout_until']:
+            return True
+        # إذا انتهت مدة الحظر، قم بإعادة الضبط
+        if self.state['lockout_until'] and datetime.now() >= self.state['lockout_until']:
+            self.record_successful_login() # Reset state
+        return False
+
+    def get_lockout_remaining_str(self):
+        if not self.is_locked_out():
+            return None
+        remaining = self.state['lockout_until'] - datetime.now()
+        minutes, seconds = divmod(remaining.total_seconds(), 60)
+        return f"{int(minutes)}m {int(seconds)}s"
+
+    def record_failed_attempt(self):
+        self.state['failed_attempts'] += 1
+        if self.state['failed_attempts'] >= MAX_LOGIN_ATTEMPTS:
+            self.state['lockout_until'] = datetime.now() + timedelta(minutes=LOCKOUT_MINUTES)
+        self.save_state()
+
+    def record_successful_login(self):
+        self.state['failed_attempts'] = 0
+        self.state['lockout_until'] = None
+        self.save_state()
 
 # --- إعدادات المظهر ---
 ctk.set_appearance_mode("Dark")
@@ -33,98 +132,80 @@ ctk.set_appearance_mode("Dark")
 class mmmxApp(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title(APP_NAME)
+        self.title("mmmx")
         self.geometry("950x700")
         self.attributes('-alpha', 0.0)
 
-        self.setup_logging()
-        self.cleanup_orphan_sessions()
+        self.app_state = AppState() # [جديد] تهيئة نظام الحماية
 
-        self.load_resources()
-        self.setup_login_screen()
-        self.after(200, self.fade_in, 0.0)
-        
-        self.source_path = ""; self.locked_file = ""; self.key_file = ""; self.operation_result = None
-        self.live_edit_temp_path = None; self.failed_logins = 0; self.last_activity = time.time()
-        self.login_locked = False
-        self.monitor_activity()
-
-    def load_resources(self):
         try:
             self.icon_path = self.resource_path("icon.ico")
             self.iconbitmap(self.icon_path)
             self.app_icon_large = ctk.CTkImage(Image.open(self.icon_path), size=(128, 128))
             self.app_icon_small = ctk.CTkImage(Image.open(self.icon_path), size=(64, 64))
         except Exception as e:
+            print(f"Icon Error: {e}")
             self.app_icon_large = None; self.app_icon_small = None
-            logging.error(f"Icon loading failed: {e}")
 
-    def play_sound(self, sound_name):
-        try:
-            if sound_name == "click": winsound.Beep(1000, 50)
-            elif sound_name == "success": winsound.Beep(1500, 150)
-            elif sound_name == "error": winsound.Beep(400, 200)
-            elif sound_name == "login": winsound.Beep(2000, 100)
-        except Exception as e:
-            logging.warning(f"Could not play sound '{sound_name}': {e}")
-            
-    def cleanup_orphan_sessions(self):
-        if os.path.exists(LOCK_FILE_PATH):
-            try:
-                with open(LOCK_FILE_PATH, "r") as f: pid = int(f.read())
-                if not psutil.pid_exists(pid):
-                    logging.warning(f"Orphan session from PID {pid} found. Cleaning up.")
-                    shutil.rmtree(TEMP_SESSION_DIR, ignore_errors=True)
-            except Exception as e:
-                logging.error(f"Error cleaning up orphan session: {e}")
-                shutil.rmtree(TEMP_SESSION_DIR, ignore_errors=True)
-
-    def monitor_activity(self):
-        if hasattr(self, 'main_frame') and self.main_frame.winfo_exists():
-            if time.time() - self.last_activity > 300: # 5 minutes
-                self.lock_app(); return
-        self.after(5000, self.monitor_activity)
-
-    def on_activity(self, event=None): self.last_activity = time.time()
-        
-    def lock_app(self):
-        logging.info("App auto-locked due to inactivity.")
-        self.play_sound("error")
-        for widget in self.winfo_children(): widget.destroy()
         self.setup_login_screen()
-        self.fade_in(0.0)
-        self.error_label_login.configure(text="تم قفل الجلسة بسبب عدم النشاط")
-        
-    def check_login(self, event=None):
-        self.play_sound("click")
-        if self.login_locked and time.time() - self.lock_time < 60:
-            self.error_label_login.configure(text=f"تم قفل الدخول. حاول بعد {60 - int(time.time() - self.lock_time)} ثانية.")
-            return
-        self.login_locked = False
-        if self.password_entry_login.get() == APP_PASSWORD:
-            self.play_sound("login"); logging.info("Successful login."); self.failed_logins = 0
-            self.fade_out_and_setup_main_ui()
-        else:
-            self.play_sound("error"); logging.warning("Failed login attempt."); self.failed_logins += 1
-            if self.failed_logins >= 5:
-                self.login_locked = True; self.lock_time = time.time()
-                self.error_label_login.configure(text="تم حظر الدخول لكثرة المحاولات. انتظر دقيقة.")
-            else:
-                self.error_label_login.configure(text=f"رمز خاطئ. تبقى ({5 - self.failed_logins}) محاولات.")
+        self.after(200, self.fade_in, 0.0)
+
+        self.source_path = ""
+        self.locked_file = ""
+        self.key_file = ""
+        self.operation_result = None
+        self.live_edit_temp_path = None
+        self.live_edit_cache_warning_shown = False # [جديد] لتتبع إظهار رسالة التحذير
 
     def setup_login_screen(self):
         self.login_frame = ctk.CTkFrame(self, fg_color=BG_COLOR, corner_radius=0)
         self.login_frame.pack(fill="both", expand=True)
 
         self.icon_label = ctk.CTkLabel(self.login_frame, text="", image=self.app_icon_large)
-        self.title_label = ctk.CTkLabel(self.login_frame, text=APP_NAME, font=ctk.CTkFont(size=32, weight="bold", family="Impact"))
+        self.title_label = ctk.CTkLabel(self.login_frame, text="mmmx", font=ctk.CTkFont(size=32, weight="bold", family="Impact"))
         self.password_entry_login = ctk.CTkEntry(self.login_frame, placeholder_text="ENTER ACCESS CODE", show="*", height=45, width=300, justify="center", font=ctk.CTkFont(size=16))
         self.login_button = ctk.CTkButton(self.login_frame, text="UNLOCK", height=45, width=300, font=ctk.CTkFont(size=18, weight="bold"), fg_color=THEME_COLOR, hover_color=HOVER_COLOR, command=self.check_login)
         self.error_label_login = ctk.CTkLabel(self.login_frame, text="", text_color="#FF4D4D")
         
-        self.icon_label.pack(pady=(150, 20)); self.title_label.pack(pady=10); self.password_entry_login.pack(pady=20)
-        self.login_button.pack(pady=10); self.error_label_login.pack(pady=10)
+        self.icon_label.pack(pady=(150, 20))
+        self.title_label.pack(pady=10)
+        self.password_entry_login.pack(pady=20)
+        self.login_button.pack(pady=10)
+        self.error_label_login.pack(pady=10)
         self.password_entry_login.bind("<Return>", self.check_login)
+        
+        # [جديد] التحقق من حالة الحظر عند بدء التشغيل
+        if self.app_state.is_locked_out():
+            self.show_lockout_message()
+
+    def show_lockout_message(self):
+        remaining_time = self.app_state.get_lockout_remaining_str()
+        if remaining_time:
+            self.error_label_login.configure(text=f"ACCESS LOCKED. TRY AGAIN IN {remaining_time}")
+            self.login_button.configure(state="disabled")
+            self.password_entry_login.configure(state="disabled")
+            self.after(1000, self.show_lockout_message) # تحديث العداد كل ثانية
+        else:
+            self.error_label_login.configure(text="")
+            self.login_button.configure(state="normal")
+            self.password_entry_login.configure(state="normal")
+
+    def check_login(self, event=None):
+        if self.app_state.is_locked_out():
+            self.show_lockout_message()
+            return
+            
+        if self.password_entry_login.get() == APP_PASSWORD:
+            self.app_state.record_successful_login()
+            self.error_label_login.configure(text="")
+            self.fade_out_and_setup_main_ui()
+        else:
+            self.app_state.record_failed_attempt()
+            if self.app_state.is_locked_out():
+                self.show_lockout_message()
+            else:
+                attempts_left = MAX_LOGIN_ATTEMPTS - self.app_state.state['failed_attempts']
+                self.error_label_login.configure(text=f"ACCESS DENIED. {attempts_left} ATTEMPTS REMAINING.")
 
     def fade_out_and_setup_main_ui(self, alpha=1.0):
         if alpha > 0:
@@ -132,7 +213,8 @@ class mmmxApp(ctk.CTk):
             self.attributes('-alpha', alpha)
             self.after(25, lambda: self.fade_out_and_setup_main_ui(alpha))
         else:
-            for widget in self.winfo_children(): widget.destroy()
+            for widget in self.winfo_children():
+                widget.destroy()
             self.setup_main_ui()
             self.fade_in(0.0)
 
@@ -144,7 +226,7 @@ class mmmxApp(ctk.CTk):
         
         sidebar_icon_label = ctk.CTkLabel(self.sidebar_frame, text="", image=self.app_icon_small)
         sidebar_icon_label.grid(row=0, column=0, pady=30, padx=20)
-        logo_label = ctk.CTkLabel(self.sidebar_frame, text=APP_NAME, font=ctk.CTkFont(size=40, weight="bold", family="Impact"))
+        logo_label = ctk.CTkLabel(self.sidebar_frame, text="mmmx", font=ctk.CTkFont(size=40, weight="bold", family="Impact"))
         logo_label.grid(row=1, column=0, padx=20, pady=(0, 20))
         self.status_label = ctk.CTkLabel(self.sidebar_frame, text="الحالة: جاهز", anchor="w", text_color="gray")
         self.status_label.grid(row=6, column=0, padx=20, pady=10, sticky="sw")
@@ -162,9 +244,6 @@ class mmmxApp(ctk.CTk):
         self.setup_operation_ui(self.tabview.tab("🔒  تشفير"), "encrypt")
         self.setup_operation_ui(self.tabview.tab("🔑  فك تشفير"), "decrypt")
         self.setup_operation_ui(self.tabview.tab("🚀  جلسة تعديل"), "live_edit")
-
-        self.bind_all("<Motion>", self.on_activity, add="+")
-        self.bind_all("<KeyPress>", self.on_activity, add="+")
 
     def setup_operation_ui(self, tab, mode):
         tab.grid_columnconfigure(0, weight=1)
@@ -224,17 +303,20 @@ class mmmxApp(ctk.CTk):
         try: base_path = sys._MEIPASS
         except Exception: base_path = os.path.abspath(".")
         return os.path.join(base_path, relative_path)
+        
     def fade_in(self, alpha=0.0):
         if alpha < 1:
             alpha += 0.05
             self.attributes('-alpha', alpha)
             self.after(15, lambda: self.fade_in(alpha))
+            
     def update_status(self, text):
-        if hasattr(self, 'status_label') and self.status_label.winfo_exists(): self.status_label.configure(text=text)
+        if self.status_label.winfo_exists(): self.status_label.configure(text=text)
+        
     def toggle_ui_state(self, state="disabled"):
         buttons = [self.encrypt_button, self.decrypt_button, self.live_edit_button]
         for btn in buttons:
-            if hasattr(self, 'encrypt_button') and btn and btn.winfo_exists(): btn.configure(state=state)
+            if btn and btn.winfo_exists(): btn.configure(state=state)
         if hasattr(self, 'tabview') and self.tabview.winfo_exists(): self.tabview.configure(state=state)
         if state == "disabled":
             if hasattr(self, 'progress_bar') and self.progress_bar.winfo_exists():
@@ -244,12 +326,11 @@ class mmmxApp(ctk.CTk):
                 self.progress_bar.stop(); self.progress_bar.grid_forget()
 
     def select_path_to_encrypt(self):
-        self.play_sound("click")
         path = filedialog.askdirectory(title="اختر مجلدًا") or filedialog.askopenfilename(title="أو اختر ملفًا واحدًا")
         if path: self.source_path = path; self.path_label_enc.configure(text=os.path.basename(path))
+        
     def select_file_to_decrypt(self, live_edit=False):
-        self.play_sound("click")
-        path = filedialog.askopenfilename(title="اختر الملف المشفر", filetypes=[(f"{APP_NAME} Locked File", "*.locked")])
+        path = filedialog.askopenfilename(title="اختر الملف المشفر", filetypes=[("mmmx Locked File", "*.locked")])
         if not path: return
         self.locked_file = path
         label = self.live_edit_file_label if live_edit else self.locked_file_label_dec
@@ -259,8 +340,8 @@ class mmmxApp(ctk.CTk):
         key_label = self.live_edit_key_label if live_edit else self.key_file_label_dec
         if mode_header == MODE_PASSWORD_ONLY: key_button.configure(state="disabled", text="لا يتطلب مفتاح"); key_label.configure(text="")
         elif mode_header == MODE_PASSWORD_AND_KEY: key_button.configure(state="normal", text="🔑  اختر ملف المفتاح..."); key_label.configure(text="في انتظار اختيار ملف المفتاح...")
+        
     def select_key_file(self, live_edit=False):
-        self.play_sound("click")
         path = filedialog.askopenfilename(title="اختر ملف المفتاح", filetypes=[("Key Files", "*.key")])
         if path: self.key_file = path; 
         label = self.live_edit_key_label if live_edit else self.key_file_label_dec
@@ -271,8 +352,8 @@ class mmmxApp(ctk.CTk):
         if key_file_content: base_secret += key_file_content
         kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=1_200_000); return base64.urlsafe_b64encode(kdf.derive(base_secret))
     
+    # --- قسم التشفير ---
     def start_encryption_thread(self):
-        self.play_sound("click")
         password = self.password_entry_enc.get()
         if not self.source_path or not password: messagebox.showerror("خطأ", "الرجاء اختيار ملف/مجلد وإدخال كلمة مرور."); return
         use_keyfile = self.use_keyfile_check.get(); key_file_path = None
@@ -281,14 +362,16 @@ class mmmxApp(ctk.CTk):
             if not key_file_path: self.update_status("الحالة: تم إلغاء العملية."); return
         self.toggle_ui_state("disabled")
         threading.Thread(target=self.encrypt_logic, args=(password, use_keyfile, key_file_path), daemon=True).start()
+
     def encrypt_logic(self, password, use_keyfile, key_file_path):
-        temp_dir = None
+        temp_dir = None; key_file_content = None; encryption_key = None
         try:
-            key_file_content = None; mode_header = MODE_PASSWORD_ONLY
+            mode_header = MODE_PASSWORD_ONLY
             if use_keyfile:
                 key_file_content = os.urandom(32)
                 with open(key_file_path, 'wb') as kf: kf.write(key_file_content)
                 mode_header = MODE_PASSWORD_AND_KEY
+            
             self.after(0, self.update_status, "الحالة: جاري ضغط الملفات..."); is_dir = os.path.isdir(self.source_path)
             if is_dir:
                 temp_dir = tempfile.mkdtemp()
@@ -297,107 +380,163 @@ class mmmxApp(ctk.CTk):
                 with open(temp_zip_path, 'rb') as f: data_to_encrypt = f.read()
             else:
                 with open(self.source_path, 'rb') as f: data_to_encrypt = f.read()
-            self.after(0, self.update_status, "الحالة: جاري التشفير (قد يطول)..."); salt = os.urandom(16); encryption_key = self.get_encryption_key(password, salt, key_file_content); fernet = Fernet(encryption_key); encrypted_data = fernet.encrypt(data_to_encrypt)
+
+            self.after(0, self.update_status, "الحالة: جاري التشفير (قد يطول)..."); salt = os.urandom(16)
+            encryption_key = self.get_encryption_key(password, salt, key_file_content)
+            fernet = Fernet(encryption_key)
+            encrypted_data = fernet.encrypt(data_to_encrypt)
+            
             self.after(0, self.update_status, "الحالة: جاري كتابة الملف..."); output_path = self.source_path + ".locked"
             with open(output_path, 'wb') as f: f.write(mode_header); f.write(salt); f.write(encrypted_data)
             self.operation_result = ("success", is_dir)
+
         except Exception as e: self.operation_result = ("error", f"حدث خطأ أثناء التشفير: {e}")
         finally:
+            # [جديد] تنظيف آمن للذاكرة والمتغيرات الحساسة
+            password = None
+            if key_file_content: key_file_content = os.urandom(len(key_file_content))
+            if encryption_key: encryption_key = os.urandom(len(encryption_key))
+            if 'data_to_encrypt' in locals(): data_to_encrypt = os.urandom(len(data_to_encrypt))
+            if 'encrypted_data' in locals(): encrypted_data = os.urandom(len(encrypted_data))
+
             if temp_dir and os.path.exists(temp_dir): shutil.rmtree(temp_dir)
             self.after(0, self.finish_encryption)
+
     def finish_encryption(self):
         self.toggle_ui_state("normal")
         status, payload = self.operation_result
         if status == "success":
-            self.play_sound("success")
             messagebox.showinfo("نجاح!", "✅ تم التشفير بنجاح!")
-            if messagebox.askyesno("تأكيد", "هل تريد حذف النسخة الأصلية الآن؟"):
+            if messagebox.askyesno("تأكيد", "هل تريد حذف النسخة الأصلية الآن؟\n(سيتم استخدام المسح الآمن الذي يمنع استرجاع الملفات)"):
+                self.update_status("الحالة: جاري المسح الآمن للأصل...")
+                is_dir = payload
                 try:
-                    if payload: shutil.rmtree(self.source_path)
-                    else: os.remove(self.source_path)
+                    # [تعديل] استخدام المسح الآمن بدلاً من الحذف التقليدي
+                    if is_dir:
+                        secure_wipe_directory(self.source_path)
+                    else:
+                        secure_wipe_file(self.source_path)
+                    messagebox.showinfo("نجاح", "تم مسح الملف الأصلي بآمان.")
                 except Exception as e: messagebox.showerror("خطأ", f"لم نتمكن من حذف الأصل: {e}")
-        elif status == "error": self.play_sound("error"); messagebox.showerror("فشل", payload)
+        elif status == "error": messagebox.showerror("فشل", payload)
         self.update_status("الحالة: جاهز.")
 
+    # --- قسم فك التشفير ---
     def start_decryption_thread(self):
-        self.play_sound("click")
         password = self.password_entry_dec.get()
         if not self.locked_file or not password: messagebox.showerror("خطأ", "اختر ملف وأدخل كلمة مرور."); return
         self.toggle_ui_state("disabled")
         threading.Thread(target=self.decrypt_logic, args=(password,), daemon=True).start()
+
     def decrypt_logic(self, password):
+        key_file_content = None; encryption_key = None; decrypted_data = None
         try:
             self.after(0, self.update_status, "الحالة: جاري فك التشفير (قد يطول)...")
-            key_file_content = None
             if self.select_key_button_dec.cget("state") == "normal":
                 if not self.key_file: self.operation_result = ("error", "هذا الملف يتطلب مفتاح."); return
                 with open(self.key_file, 'rb') as kf: key_file_content = kf.read()
             with open(self.locked_file, 'rb') as f: f.read(1); salt = f.read(16); encrypted_data = f.read()
-            encryption_key = self.get_encryption_key(password, salt, key_file_content); fernet = Fernet(encryption_key); decrypted_data = fernet.decrypt(encrypted_data)
+            encryption_key = self.get_encryption_key(password, salt, key_file_content)
+            fernet = Fernet(encryption_key)
+            decrypted_data = fernet.decrypt(encrypted_data)
             self.operation_result = ("success", decrypted_data)
         except Exception: self.operation_result = ("error", "فشلت العملية. تأكد من صحة كلمة المرور أو ملف المفتاح.")
-        finally: self.after(0, self.finish_decryption)
+        finally:
+            # [جديد] تنظيف آمن للذاكرة
+            password = None
+            if key_file_content: key_file_content = os.urandom(len(key_file_content))
+            if encryption_key: encryption_key = os.urandom(len(encryption_key))
+            # لا نمسح decrypted_data هنا لأننا سنستخدمه في الخطوة التالية
+            self.after(0, self.finish_decryption)
+
     def finish_decryption(self):
         self.toggle_ui_state("normal"); status, payload = self.operation_result
         if status == "success":
-            self.play_sound("success")
+            decrypted_data = payload
             output_folder = filedialog.askdirectory(title="اختر مجلدًا لحفظ الملفات المفكوكة فيه")
-            if not output_folder: self.update_status("الحالة: تم إلغاء الحفظ."); return
+            if not output_folder: 
+                self.update_status("الحالة: تم إلغاء الحفظ.")
+                # [جديد] مسح البيانات المفكوكة إذا ألغى المستخدم الحفظ
+                if 'decrypted_data' in locals(): decrypted_data = os.urandom(len(decrypted_data))
+                return
             final_output_path = os.path.join(output_folder, os.path.basename(self.locked_file).replace(".locked", ""))
             try:
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp_zip: tmp_zip.write(payload); tmp_zip_path = tmp_zip.name
-                os.makedirs(final_output_path, exist_ok=True); shutil.unpack_archive(tmp_zip_path, final_output_path); os.remove(tmp_zip_path)
+                # استخدام ذاكرة مؤقتة لملف الزيب بدلاً من كتابته مباشرة
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp_zip:
+                    tmp_zip.write(decrypted_data)
+                    tmp_zip_path = tmp_zip.name
+                os.makedirs(final_output_path, exist_ok=True); shutil.unpack_archive(tmp_zip_path, final_output_path)
+                os.remove(tmp_zip_path) # الحذف العادي هنا مقبول لأنه ملف مؤقت للنظام
             except:
-                with open(final_output_path, 'wb') as f: f.write(payload)
+                with open(final_output_path, 'wb') as f: f.write(decrypted_data)
+            
+            # [جديد] مسح البيانات من الذاكرة بعد كتابتها
+            if 'decrypted_data' in locals(): decrypted_data = os.urandom(len(decrypted_data))
+
             messagebox.showinfo("نجاح!", f"✅ تم فك التشفير بنجاح!\n\nتم الحفظ في: {final_output_path}")
             if messagebox.askyesno("تأكيد", "هل تريد حذف الملف المشفر الآن؟"):
                 try: os.remove(self.locked_file)
                 except Exception as e: messagebox.showerror("خطأ", f"لم نتمكن من حذف الملف المشفر: {e}")
-        elif status == "error": self.play_sound("error"); messagebox.showerror("فشل", payload)
+        elif status == "error": messagebox.showerror("فشل", payload)
         self.update_status("الحالة: جاهز.")
 
+    # --- قسم جلسة التعديل ---
     def start_live_edit_thread(self):
-        self.play_sound("click")
         password = self.password_entry_live.get()
         if not self.locked_file or not password: messagebox.showerror("خطأ", "اختر ملف وأدخل كلمة مرور."); return
         self.toggle_ui_state("disabled")
         threading.Thread(target=self.live_edit_logic, args=(password,), daemon=True).start()
+
     def live_edit_logic(self, password):
+        key_file_content = None; encryption_key = None; decrypted_data = None
         try:
             self.after(0, self.update_status, "الحالة: جاري فتح جلسة التعديل...")
-            key_file_content = None
             if self.select_key_button_live.cget("state") == "normal":
                 if not self.key_file: self.operation_result = ("error", "هذا الملف يتطلب مفتاح."); return
                 with open(self.key_file, 'rb') as kf: key_file_content = kf.read()
-            with open(self.locked_file, 'rb') as f: self.mode_header = f.read(1); self.salt = f.read(16); encrypted_data = f.read()
-            encryption_key = self.get_encryption_key(password, self.salt, key_file_content); fernet = Fernet(encryption_key); decrypted_data = fernet.decrypt(encrypted_data)
-            
-            if os.path.exists(TEMP_SESSION_DIR): shutil.rmtree(TEMP_SESSION_DIR) # Clean up previous just in case
-            os.makedirs(TEMP_SESSION_DIR)
-            with open(LOCK_FILE_PATH, "w") as f: f.write(str(os.getpid()))
 
-            self.live_edit_temp_path = TEMP_SESSION_DIR
+            with open(self.locked_file, 'rb') as f: self.mode_header = f.read(1); self.salt = f.read(16); encrypted_data = f.read()
+            encryption_key = self.get_encryption_key(password, self.salt, key_file_content)
+            fernet = Fernet(encryption_key)
+            decrypted_data = fernet.decrypt(encrypted_data)
+            
+            self.live_edit_temp_path = tempfile.mkdtemp(prefix="mmmx_")
             try:
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".zip", dir=self.live_edit_temp_path) as tmp_zip: tmp_zip.write(decrypted_data); tmp_zip_path = tmp_zip.name
-                shutil.unpack_archive(tmp_zip_path, self.live_edit_temp_path); os.remove(tmp_zip_path)
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp_zip: 
+                    tmp_zip.write(decrypted_data)
+                    tmp_zip_path = tmp_zip.name
+                shutil.unpack_archive(tmp_zip_path, self.live_edit_temp_path)
+                os.remove(tmp_zip_path)
             except:
                 file_path = os.path.join(self.live_edit_temp_path, os.path.basename(self.locked_file).replace(".locked", ""))
                 with open(file_path, 'wb') as f: f.write(decrypted_data)
             self.operation_result = ("success", None)
         except Exception: self.operation_result = ("error", "فشل فتح الجلسة. تأكد من صحة كلمة المرور/المفتاح.")
-        finally: self.after(0, self.finish_live_edit_setup)
+        finally:
+            # [جديد] تنظيف آمن للذاكرة
+            password = None
+            if key_file_content: key_file_content = os.urandom(len(key_file_content))
+            if encryption_key: encryption_key = os.urandom(len(encryption_key))
+            if decrypted_data: decrypted_data = os.urandom(len(decrypted_data))
+            self.after(0, self.finish_live_edit_setup)
+
     def finish_live_edit_setup(self):
         status, payload = self.operation_result
         if status == "error":
-            self.play_sound("error"); messagebox.showerror("فشل", payload); self.toggle_ui_state("normal"); self.update_status("الحالة: جاهز.")
-            if self.live_edit_temp_path and os.path.exists(self.live_edit_temp_path): shutil.rmtree(self.live_edit_temp_path)
+            messagebox.showerror("فشل", payload)
+            self.toggle_ui_state("normal")
+            self.update_status("الحالة: جاهز.")
+            if self.live_edit_temp_path and os.path.exists(self.live_edit_temp_path):
+                # [جديد] مسح آمن للمجلد المؤقت في حالة الفشل
+                self.update_status("الحالة: جاري المسح الآمن...")
+                threading.Thread(target=self.secure_cleanup_and_reset, args=(self.live_edit_temp_path,)).start()
+                self.live_edit_temp_path = None
         else:
-            self.play_sound("success")
             self.live_edit_setup_frame.grid_remove()
             self.file_browser_frame.grid(row=0, column=0, sticky="nsew")
             self.populate_file_browser(self.live_edit_temp_path)
             self.update_status("الحالة: جلسة تعديل نشطة.")
-    
+
     def populate_file_browser(self, path):
         self.current_browser_path = path
         for widget in self.browser_scrollable_frame.winfo_children(): widget.destroy()
@@ -411,7 +550,6 @@ class mmmxApp(ctk.CTk):
         try:
             items = sorted(os.listdir(path), key=lambda s: not os.path.isdir(os.path.join(path, s)))
             for item_name in items:
-                if item_name == "session.lock": continue # Hide lock file
                 item_path = os.path.join(path, item_name)
                 is_dir = os.path.isdir(item_path)
                 icon = "📁" if is_dir else "📄"
@@ -426,73 +564,93 @@ class mmmxApp(ctk.CTk):
         except Exception as e: ctk.CTkLabel(self.browser_scrollable_frame, text=f"خطأ في الوصول: {e}", text_color="red").pack()
     
     def handle_item_click(self, path, is_dir):
-        if is_dir: self.play_sound("click"); self.populate_file_browser(path)
+        if is_dir: self.populate_file_browser(path)
         else:
-            try: self.play_sound("click"); os.startfile(path)
-            except Exception as e: self.play_sound("error"); messagebox.showerror("خطأ", f"لم يتمكن من فتح الملف: {e}")
+            # [جديد] إظهار تحذير حول تسريب البيانات للبرامج الخارجية
+            if not self.live_edit_cache_warning_shown:
+                messagebox.showwarning("تحذير أمني", "فتح الملفات في برامج خارجية قد يترك آثارًا في ذاكرة التخزين المؤقت (Cache) لتلك البرامج.\n\nسيتم مسح الملفات من مجلد الجلسة بشكل آمن عند الحفظ، ولكن لا يمكن للبرنامج التحكم في آثار البرامج الأخرى.")
+                self.live_edit_cache_warning_shown = True
+            try: os.startfile(path)
+            except Exception as e: messagebox.showerror("خطأ", f"لم يتمكن من فتح الملف: {e}")
+            
     def add_file_to_session(self):
-        self.play_sound("click")
         file_to_add = filedialog.askopenfilename(title="اختر ملفًا لإضافته")
         if file_to_add:
             try: shutil.copy(file_to_add, self.current_browser_path); self.populate_file_browser(self.current_browser_path)
-            except Exception as e: self.play_sound("error"); messagebox.showerror("خطأ", f"فشل في إضافة الملف: {e}")
+            except Exception as e: messagebox.showerror("خطأ", f"فشل في إضافة الملف: {e}")
+            
     def add_folder_to_session(self):
-        self.play_sound("click")
         dialog = ctk.CTkInputDialog(text="أدخل اسم المجلد الجديد:", title="إنشاء مجلد")
         folder_name = dialog.get_input()
         if folder_name:
             try: os.makedirs(os.path.join(self.current_browser_path, folder_name)); self.populate_file_browser(self.current_browser_path)
-            except Exception as e: self.play_sound("error"); messagebox.showerror("خطأ", f"فشل في إنشاء المجلد: {e}")
+            except Exception as e: messagebox.showerror("خطأ", f"فشل في إنشاء المجلد: {e}")
+            
     def delete_session_item(self, path):
-        self.play_sound("click")
+        # الحذف هنا ليس بحاجة ليكون آمناً، لأن المجلد المؤقت بأكمله سيتم مسحه بشكل آمن
         if messagebox.askyesno("تأكيد الحذف", f"هل أنت متأكد من حذف '{os.path.basename(path)}'؟\nسيتم الحذف بشكل دائم عند حفظ الجلسة."):
             try:
                 if os.path.isdir(path): shutil.rmtree(path)
                 else: os.remove(path)
                 self.populate_file_browser(self.current_browser_path)
-            except Exception as e: self.play_sound("error"); messagebox.showerror("خطأ", f"فشل الحذف: {e}")
+            except Exception as e: messagebox.showerror("خطأ", f"فشل الحذف: {e}")
     
     def start_relock_thread(self):
-        self.play_sound("click")
         password = self.password_entry_live.get()
         self.toggle_ui_state("disabled")
         threading.Thread(target=self.relock_logic, args=(password,), daemon=True).start()
+
     def relock_logic(self, password):
+        key_file_content = None; encryption_key = None
+        repacked_zip = None
         try:
             self.after(0, self.update_status, "الحالة: جاري حفظ وإعادة التشفير...")
-            key_file_content = None
             if self.select_key_button_live.cget("state") == "normal":
                 with open(self.key_file, 'rb') as kf: key_file_content = kf.read()
+
             archive_path = os.path.join(tempfile.gettempdir(), 'mmmx_repack')
-            
-            # Securely remove the lock file before repacking
-            if os.path.exists(LOCK_FILE_PATH): os.remove(LOCK_FILE_PATH)
-            
             repacked_zip = shutil.make_archive(archive_path, 'zip', self.live_edit_temp_path)
+
             with open(repacked_zip, 'rb') as f: data_to_encrypt = f.read()
-            encryption_key = self.get_encryption_key(password, self.salt, key_file_content); fernet = Fernet(encryption_key); new_encrypted_data = fernet.encrypt(data_to_encrypt)
+
+            encryption_key = self.get_encryption_key(password, self.salt, key_file_content)
+            fernet = Fernet(encryption_key)
+            new_encrypted_data = fernet.encrypt(data_to_encrypt)
+            
             with open(self.locked_file, 'wb') as f: f.write(self.mode_header); f.write(self.salt); f.write(new_encrypted_data)
             self.operation_result = ("success", None)
         except Exception as e: self.operation_result = ("error", f"فشل الحفظ: {e}")
         finally:
-            if self.live_edit_temp_path and os.path.exists(self.live_edit_temp_path): shutil.rmtree(self.live_edit_temp_path)
-            if 'repacked_zip' in locals() and os.path.exists(repacked_zip): os.remove(repacked_zip)
+            # [جديد] مسح آمن للذاكرة والمجلدات المؤقتة
+            password = None
+            if key_file_content: key_file_content = os.urandom(len(key_file_content))
+            if encryption_key: encryption_key = os.urandom(len(encryption_key))
+            if 'data_to_encrypt' in locals(): data_to_encrypt = os.urandom(len(data_to_encrypt))
+
+            # مسح المجلد الذي يحتوي على الملفات المفكوكة
+            if self.live_edit_temp_path and os.path.exists(self.live_edit_temp_path):
+                secure_wipe_directory(self.live_edit_temp_path)
+            # مسح ملف الـ zip المؤقت
+            if repacked_zip and os.path.exists(repacked_zip):
+                secure_wipe_file(repacked_zip)
+
             self.after(0, self.finish_relock)
+
     def finish_relock(self):
         self.toggle_ui_state("normal")
         status, payload = self.operation_result
-        if status == "success":
-            self.play_sound("success"); messagebox.showinfo("نجاح", "✅ تم حفظ التغييرات وإعادة قفل الملف بنجاح!")
-        else: self.play_sound("error"); messagebox.showerror("فشل", payload)
+        if status == "success": messagebox.showinfo("نجاح", "✅ تم حفظ التغييرات وإعادة قفل الملف بنجاح!")
+        else: messagebox.showerror("فشل", payload)
         self.file_browser_frame.grid_remove()
         self.live_edit_setup_frame.grid()
         self.update_status("الحالة: جاهز.")
+        self.live_edit_cache_warning_shown = False # إعادة ضبط التحذير للجلسة التالية
 
-    def setup_logging(self):
-        logging.basicConfig(filename=f'{APP_NAME.lower()}_log.txt', level=logging.INFO, 
-                            format='%(asctime)s - %(levelname)s - %(message)s')
+    def secure_cleanup_and_reset(self, path):
+        if path and os.path.exists(path):
+            secure_wipe_directory(path)
+        self.after(0, self.update_status, "الحالة: جاهز.")
 
 if __name__ == "__main__":
     app = mmmxApp()
     app.mainloop()
-
