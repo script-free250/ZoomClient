@@ -2,6 +2,7 @@ import os
 import sys
 import shutil
 import base64
+import tempfile
 import threading
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
@@ -121,7 +122,7 @@ class SingularityApp(ctk.CTk):
     def select_file_to_decrypt(self):
         path = filedialog.askopenfilename(title="اختر الملف المشفر", filetypes=[("Singularity Locked", "*.locked")])
         if not path: return
-        self.locked_file = path; self.locked_file_label.configure(text=os.path.basename(path)); self.key_file = "" # Reset key selection
+        self.locked_file = path; self.locked_file_label.configure(text=os.path.basename(path)); self.key_file = ""
         with open(path, 'rb') as f: mode_header = f.read(1)
         if mode_header == MODE_PASSWORD_ONLY: self.select_key_button_dec.configure(state="disabled", text="لا يتطلب مفتاح"); self.key_file_label.configure(text="")
         elif mode_header == MODE_PASSWORD_AND_KEY: self.select_key_button_dec.configure(state="normal", text="🔑  اختر ملف المفتاح..."); self.key_file_label.configure(text="في انتظار اختيار ملف المفتاح...")
@@ -129,9 +130,9 @@ class SingularityApp(ctk.CTk):
         path = filedialog.askopenfilename(title="اختر ملف المفتاح", filetypes=[("Key Files", "*.key")]); 
         if path: self.key_file = path; self.key_file_label.configure(text=os.path.basename(path))
 
-    # --- دوال التشفير وفك التشفير (تعمل الآن في خيط خلفي) ---
+    # --- دوال التشفير وفك التشفير (مع الحل الجذري) ---
     def get_encryption_key(self, password, salt, key_file_content=None):
-        base_secret = password.encode()
+        base_secret = password.encode(); 
         if key_file_content: base_secret += key_file_content
         kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=1_200_000); 
         return base64.urlsafe_b64encode(kdf.derive(base_secret))
@@ -142,6 +143,7 @@ class SingularityApp(ctk.CTk):
         threading.Thread(target=self.encrypt_logic, daemon=True).start()
 
     def encrypt_logic(self):
+        temp_dir = None
         try:
             password = self.password_entry_enc.get(); use_keyfile = self.use_keyfile_check.get(); key_file_content = None; mode_header = MODE_PASSWORD_ONLY
             if use_keyfile:
@@ -152,8 +154,11 @@ class SingularityApp(ctk.CTk):
                 mode_header = MODE_PASSWORD_AND_KEY
             self.after(0, self.update_status, "الحالة: جاري ضغط الملفات..."); is_dir = os.path.isdir(self.source_path)
             if is_dir:
-                temp_zip_path = shutil.make_archive("temp_archive", 'zip', self.source_path); 
-                with open(temp_zip_path, 'rb') as f: data_to_encrypt = f.read(); os.remove(temp_zip_path)
+                # --- الحل: استخدام مجلد مؤقت آمن ---
+                temp_dir = tempfile.mkdtemp()
+                archive_path = os.path.join(temp_dir, 'archive')
+                temp_zip_path = shutil.make_archive(archive_path, 'zip', self.source_path)
+                with open(temp_zip_path, 'rb') as f: data_to_encrypt = f.read()
             else:
                 with open(self.source_path, 'rb') as f: data_to_encrypt = f.read()
             self.after(0, self.update_status, "الحالة: جاري التشفير (قد يطول)..."); salt = os.urandom(16); encryption_key = self.get_encryption_key(password, salt, key_file_content); fernet = Fernet(encryption_key); encrypted_data = fernet.encrypt(data_to_encrypt)
@@ -163,6 +168,7 @@ class SingularityApp(ctk.CTk):
         except Exception as e:
             self.operation_result = ("error", f"حدث خطأ أثناء التشفير: {e}")
         finally:
+            if temp_dir and os.path.exists(temp_dir): shutil.rmtree(temp_dir) # تنظيف المجلد المؤقت
             self.after(0, self.finish_encryption)
 
     def finish_encryption(self):
@@ -193,7 +199,7 @@ class SingularityApp(ctk.CTk):
             with open(self.locked_file, 'rb') as f: f.read(1); salt = f.read(16); encrypted_data = f.read()
             encryption_key = self.get_encryption_key(password, salt, key_file_content); fernet = Fernet(encryption_key); decrypted_data = fernet.decrypt(encrypted_data)
             self.operation_result = ("success", decrypted_data)
-        except Exception as e:
+        except Exception:
             self.operation_result = ("error", "فشلت العملية. تأكد من صحة كلمة المرور أو ملف المفتاح.")
         finally:
             self.after(0, self.finish_decryption)
@@ -206,8 +212,11 @@ class SingularityApp(ctk.CTk):
             if not output_folder: self.update_status("الحالة: تم إلغاء الحفظ."); return
             final_output_path = os.path.join(output_folder, os.path.basename(self.locked_file).replace(".locked", ""))
             try:
-                with open("dec_temp.zip", 'wb') as f: f.write(payload)
-                os.makedirs(final_output_path, exist_ok=True); shutil.unpack_archive("dec_temp.zip", final_output_path); os.remove("dec_temp.zip")
+                # --- استخدام ملف مؤقت آمن هنا أيضًا ---
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp_zip:
+                    tmp_zip.write(payload)
+                    tmp_zip_path = tmp_zip.name
+                os.makedirs(final_output_path, exist_ok=True); shutil.unpack_archive(tmp_zip_path, final_output_path); os.remove(tmp_zip_path)
             except:
                 with open(final_output_path, 'wb') as f: f.write(payload)
             messagebox.showinfo("نجاح!", f"✅ تم فك التشفير بنجاح!\n\nتم الحفظ في: {final_output_path}")
@@ -216,7 +225,6 @@ class SingularityApp(ctk.CTk):
                 except Exception as e: messagebox.showerror("خطأ", f"لم نتمكن من حذف الملف المشفر: {e}")
         elif status == "error": messagebox.showerror("فشل", payload)
         self.update_status("الحالة: جاهز.")
-
 
 if __name__ == "__main__":
     app = SingularityApp()
