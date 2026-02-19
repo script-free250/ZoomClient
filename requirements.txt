@@ -3,3 +3,4 @@ customtkinter
 pyinstaller
 Pillow
 tkinterdnd2-universal
+tkinterdnd2
