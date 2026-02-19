@@ -1,3 +1,46 @@
-# ... (داخل ملف .github/workflows/build.yml)
-- name: Build executable with PyInstaller
-  run: pyinstaller --name "FileEncryptor" --onefile --windowed gui_encryptor.py
+name: Build Windows Executable
+
+# هذا القسم يحدد متى يجب أن تعمل عملية البناء
+# تعمل تلقائيًا عند رفع الكود، أو يمكنك تشغيلها يدويًا
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch: # يسمح لك بتشغيل هذا العمل يدويًا من علامة التبويب Actions
+
+jobs:
+  build:
+    # يخبر GitHub باستخدام جهاز كمبيوتر يعمل بنظام Windows جديد للبناء
+    runs-on: windows-latest
+
+    steps:
+      # الخطوة 1: تنزيل الكود الخاص بك من المستودع
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # الخطوة 2: إعداد بيئة بايثون على الجهاز الافتراضي
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      # الخطوة 3: تثبيت جميع المكتبات المطلوبة للبرنامج
+      # هذه هي الخطوة التي كنت ستقوم بها على جهازك، ولكن GitHub يقوم بها نيابة عنك
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller customtkinter cryptography
+
+      # الخطوة 4: تشغيل PyInstaller لبناء ملف .exe واحد
+      # --onefile: يدمج كل شيء في ملف تنفيذي واحد
+      # --windowed: يخفي نافذة الأوامر السوداء عند تشغيل التطبيق
+      # --name: يحدد اسم ملف .exe النهائي الخاص بك
+      - name: Build executable with PyInstaller
+        run: pyinstaller --name "FileEncryptor" --onefile --windowed gui_encryptor.py
+
+      # الخطوة 5: رفع ملف .exe النهائي حتى تتمكن من تنزيله
+      # سيظهر البرنامج في قسم "Artifacts" من البناء المكتمل
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FileEncryptor-Windows-Executable
+          path: dist/FileEncryptor.exe
