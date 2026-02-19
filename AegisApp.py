@@ -106,7 +106,6 @@ class AegisApp(ctk.CTk):
         
         self.password_entry_live = password_entry; self.select_key_button_live = select_key_button; self.live_edit_button = action_button
 
-    # --- دوال الواجهة والتحكم ---
     def resource_path(self, relative_path):
         try: base_path = sys._MEIPASS
         except Exception: base_path = os.path.abspath(".")
@@ -122,21 +121,17 @@ class AegisApp(ctk.CTk):
         if state == "disabled": self.progress_bar.grid(row=6, column=0, padx=20, pady=10, sticky="sew"); self.progress_bar.start()
         else: self.progress_bar.stop(); self.progress_bar.grid_forget()
 
-    # --- دوال اختيار الملفات (مع إضافة قسم التعديل المباشر) ---
     def select_path_to_encrypt(self):
         path = filedialog.askdirectory(title="اختر مجلدًا") or filedialog.askopenfilename(title="أو اختر ملفًا واحدًا")
         if path: self.source_path = path; self.path_label_enc.configure(text=os.path.basename(path))
-    def select_file_for_live_edit(self):
-        self.select_file_to_decrypt(live_edit=True)
-    def select_key_file_for_live_edit(self):
-        self.select_key_file(live_edit=True)
+    def select_file_for_live_edit(self): self.select_file_to_decrypt(live_edit=True)
+    def select_key_file_for_live_edit(self): self.select_key_file(live_edit=True)
     def select_file_to_decrypt(self, live_edit=False):
         path = filedialog.askopenfilename(title="اختر الملف المشفر", filetypes=[("Aegis Locked File", "*.locked")])
         if not path: return
         self.locked_file = path
         label = self.live_edit_file_label if live_edit else self.locked_file_label_dec
-        label.configure(text=os.path.basename(path))
-        self.key_file = "" # Reset
+        label.configure(text=os.path.basename(path)); self.key_file = ""
         with open(path, 'rb') as f: mode_header = f.read(1)
         key_button = self.select_key_button_live if live_edit else self.select_key_button_dec
         key_label = self.live_edit_key_label if live_edit else self.key_file_label_dec
@@ -148,16 +143,15 @@ class AegisApp(ctk.CTk):
         label = self.live_edit_key_label if live_edit else self.key_file_label_dec
         label.configure(text=os.path.basename(path))
 
-    # --- منطق التشفير وفك التشفير (يعمل في خيوط خلفية) ---
     def get_encryption_key(self, password, salt, key_file_content=None):
         base_secret = password.encode()
         if key_file_content: base_secret += key_file_content
         kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=1_200_000); return base64.urlsafe_b64encode(kdf.derive(base_secret))
-    def start_encryption_thread(self): # ... (نفس كود التشفير السابق)
+    def start_encryption_thread(self):
         if not self.source_path or not self.password_entry_enc.get(): messagebox.showerror("خطأ", "الرجاء اختيار ملف/مجلد وإدخال كلمة مرور."); return
         self.toggle_ui_state("disabled")
         threading.Thread(target=self.encrypt_logic, daemon=True).start()
-    def encrypt_logic(self): # ... (نفس كود التشفير السابق)
+    def encrypt_logic(self):
         temp_dir = None
         try:
             password = self.password_entry_enc.get(); use_keyfile = self.use_keyfile_check.get(); key_file_content = None; mode_header = MODE_PASSWORD_ONLY
@@ -184,7 +178,7 @@ class AegisApp(ctk.CTk):
         finally:
             if temp_dir and os.path.exists(temp_dir): shutil.rmtree(temp_dir)
             self.after(0, self.finish_encryption)
-    def finish_encryption(self): # ... (نفس كود التشفير السابق)
+    def finish_encryption(self):
         self.toggle_ui_state("normal")
         status, payload = self.operation_result
         if status == "success":
@@ -196,11 +190,11 @@ class AegisApp(ctk.CTk):
                 except Exception as e: messagebox.showerror("خطأ", f"لم نتمكن من حذف الأصل: {e}")
         elif status == "error": messagebox.showerror("فشل", payload)
         self.update_status("الحالة: جاهز.")
-    def start_decryption_thread(self): # ... (نفس كود فك التشفير السابق)
+    def start_decryption_thread(self):
         if not self.locked_file or not self.password_entry_dec.get(): messagebox.showerror("خطأ", "اختر ملف وأدخل كلمة مرور."); return
         self.toggle_ui_state("disabled")
         threading.Thread(target=self.decrypt_logic, daemon=True).start()
-    def decrypt_logic(self): # ... (نفس كود فك التشفير السابق)
+    def decrypt_logic(self):
         try:
             self.after(0, self.update_status, "الحالة: جاري فك التشفير (قد يطول)...")
             password = self.password_entry_dec.get(); key_file_content = None
@@ -212,7 +206,7 @@ class AegisApp(ctk.CTk):
             self.operation_result = ("success", decrypted_data)
         except Exception: self.operation_result = ("error", "فشلت العملية. تأكد من صحة كلمة المرور أو ملف المفتاح.")
         finally: self.after(0, self.finish_decryption)
-    def finish_decryption(self): # ... (نفس كود فك التشفير السابق)
+    def finish_decryption(self):
         self.toggle_ui_state("normal")
         status, payload = self.operation_result
         if status == "success":
@@ -222,7 +216,11 @@ class AegisApp(ctk.CTk):
             try:
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp_zip: tmp_zip.write(payload); tmp_zip_path = tmp_zip.name
                 os.makedirs(final_output_path, exist_ok=True); shutil.unpack_archive(tmp_zip_path, final_output_path); os.remove(tmp_zip_path)
-            except: with open(final_output_path, 'wb') as f: f.write(payload)
+            # ----- هنا كان الخطأ -----
+            except:
+                with open(final_output_path, 'wb') as f:
+                    f.write(payload)
+            # ------------------------
             messagebox.showinfo("نجاح!", f"✅ تم فك التشفير بنجاح!\n\nتم الحفظ في: {final_output_path}")
             if messagebox.askyesno("تأكيد", "هل تريد حذف الملف المشفر الآن؟"):
                 try: os.remove(self.locked_file)
@@ -230,12 +228,11 @@ class AegisApp(ctk.CTk):
         elif status == "error": messagebox.showerror("فشل", payload)
         self.update_status("الحالة: جاهز.")
 
-    # --- منطق التعديل المباشر الجديد ---
+    # --- منطق التعديل المباشر (يبقى كما هو) ---
     def start_live_edit_thread(self):
         if not self.locked_file or not self.password_entry_live.get(): messagebox.showerror("خطأ", "اختر ملف وأدخل كلمة مرور."); return
         self.toggle_ui_state("disabled")
         threading.Thread(target=self.live_edit_logic, daemon=True).start()
-
     def live_edit_logic(self):
         try:
             self.after(0, self.update_status, "الحالة: جاري فتح جلسة التعديل...")
@@ -259,7 +256,6 @@ class AegisApp(ctk.CTk):
             self.operation_result = ("error", "فشل فتح الجلسة. تأكد من صحة كلمة المرور/المفتاح.")
         finally:
             self.after(0, self.finish_live_edit_setup)
-
     def finish_live_edit_setup(self):
         status, payload = self.operation_result
         if status == "error":
@@ -271,7 +267,6 @@ class AegisApp(ctk.CTk):
             self.update_status("الحالة: جلسة تعديل نشطة.")
             os.startfile(self.live_edit_temp_path)
             self.open_session_window()
-
     def open_session_window(self):
         self.session_window = ctk.CTkToplevel(self)
         self.session_window.title("جلسة تعديل"); self.session_window.geometry("400x150")
@@ -281,23 +276,19 @@ class AegisApp(ctk.CTk):
         save_button = ctk.CTkButton(self.session_window, text="حفظ التغييرات وإعادة القفل", height=40, font=ctk.CTkFont(size=16, weight="bold"), command=self.start_relock_thread)
         save_button.pack(pady=10, padx=20, fill="x")
         self.session_window.protocol("WM_DELETE_WINDOW", self.start_relock_thread)
-
     def start_relock_thread(self):
         if self.session_window: self.session_window.destroy(); self.session_window = None
         self.toggle_ui_state("disabled")
         threading.Thread(target=self.relock_logic, daemon=True).start()
-
     def relock_logic(self):
         try:
             self.after(0, self.update_status, "الحالة: جاري حفظ وإعادة التشفير...")
             password = self.password_entry_live.get(); key_file_content = None
             if self.select_key_button_live.cget("state") == "normal":
                 with open(self.key_file, 'rb') as kf: key_file_content = kf.read()
-
             archive_path = os.path.join(tempfile.gettempdir(), 'aegis_repack')
             repacked_zip = shutil.make_archive(archive_path, 'zip', self.live_edit_temp_path)
             with open(repacked_zip, 'rb') as f: data_to_encrypt = f.read()
-
             encryption_key = self.get_encryption_key(password, self.salt, key_file_content); fernet = Fernet(encryption_key); new_encrypted_data = fernet.encrypt(data_to_encrypt)
             with open(self.locked_file, 'wb') as f: f.write(self.mode_header); f.write(self.salt); f.write(new_encrypted_data)
             self.operation_result = ("success", None)
@@ -306,7 +297,6 @@ class AegisApp(ctk.CTk):
         finally:
             if self.live_edit_temp_path: shutil.rmtree(self.live_edit_temp_path)
             self.after(0, self.finish_relock)
-
     def finish_relock(self):
         self.toggle_ui_state("normal")
         status, payload = self.operation_result
@@ -317,4 +307,3 @@ class AegisApp(ctk.CTk):
 if __name__ == "__main__":
     app = AegisApp()
     app.mainloop()
-
