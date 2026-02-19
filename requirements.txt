@@ -1,3 +1,5 @@
 cryptography
 customtkinter
 pyinstaller
+Pillow
+tkinterdnd2-universal
