@@ -1,22 +1,55 @@
-name: Build Windows Executable
+# اسم سير العمل الذي سيظهر في علامة تبويب "Actions" في GitHub
+name: Build Aegis Executable
 
+# يحدد متى يتم تشغيل سير العمل هذا
 on:
+  # يتم التشغيل تلقائيًا عند أي عملية "push" إلى الفرع الرئيسي "main"
   push:
     branches: [ "main" ]
+  
+  # يسمح لك بتشغيل سير العمل هذا يدويًا من واجهة GitHub
   workflow_dispatch:
 
+# يحدد المهام التي سيتم تنفيذها
 jobs:
+  # تعريف مهمة واحدة فقط اسمها "build"
   build:
+    # يخبر GitHub باستخدام جهاز افتراضي يعمل بأحدث إصدار من نظام Windows
     runs-on: windows-latest
+
+    # يحدد الخطوات التي ستنفذها المهمة بالترتيب
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v4
-        with: { python-version: '3.10' }
-      - run: |
+      # الخطوة 1: تنزيل الكود من مستودعك إلى الجهاز الافتراضي
+      - name: Checkout repository code
+        uses: actions/checkout@v4
+
+      # الخطوة 2: إعداد بيئة بايثون (الإصدار 3.10)
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      # الخطوة 3: تثبيت المكتبات اللازمة التي يعتمد عليها البرنامج
+      - name: Install dependencies
+        run: |
           python -m pip install --upgrade pip
           pip install pyinstaller customtkinter cryptography
-      - run: pyinstaller --name "Aegis" --onefile --windowed --add-data "icon.ico;." AegisApp.py
-      - uses: actions/upload-artifact@v4
+
+      # الخطوة 4: تشغيل أداة PyInstaller لبناء البرنامج
+      # --name "Aegis": اسم الملف التنفيذي النهائي.
+      # --onefile: لدمج كل شيء في ملف .exe واحد.
+      # --windowed: لإخفاء نافذة الأوامر السوداء عند تشغيل البرنامج.
+      # --add-data "icon.ico;.": لتضمين ملف الأيقونة بشكل صحيح في الحزمة النهائية.
+      # AegisApp.py: اسم ملف البايثون الرئيسي الخاص بك.
+      - name: Build executable with PyInstaller
+        run: pyinstaller --name "Aegis" --onefile --windowed --add-data "icon.ico;." AegisApp.py
+
+      # الخطوة 5: رفع الملف التنفيذي الناتج كـ "artifact"
+      # هذا ما يسمح لك بتنزيله بعد انتهاء عملية البناء
+      - name: Upload Aegis Executable
+        uses: actions/upload-artifact@v4
         with:
+          # اسم الملف الذي سيظهر لك في صفحة التنزيل
           name: Aegis-Executable
+          # المسار إلى الملف الذي تم إنشاؤه بواسطة PyInstaller
           path: dist/Aegis.exe
