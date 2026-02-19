@@ -1,5 +1,5 @@
 # اسم سير العمل الذي سيظهر في علامة تبويب "Actions" في GitHub
-name: Build Aegis Executable
+name: Build Chimera Executable
 
 # يحدد متى يتم تشغيل سير العمل هذا
 on:
@@ -36,20 +36,20 @@ jobs:
           pip install pyinstaller customtkinter cryptography
 
       # الخطوة 4: تشغيل أداة PyInstaller لبناء البرنامج
-      # --name "Aegis": اسم الملف التنفيذي النهائي.
+      # --name "Chimera": اسم الملف التنفيذي النهائي.
       # --onefile: لدمج كل شيء في ملف .exe واحد.
       # --windowed: لإخفاء نافذة الأوامر السوداء عند تشغيل البرنامج.
       # --add-data "icon.ico;.": لتضمين ملف الأيقونة بشكل صحيح في الحزمة النهائية.
-      # AegisApp.py: اسم ملف البايثون الرئيسي الخاص بك.
+      # ChimeraApp.py: اسم ملف البايثون الرئيسي الخاص بك.
       - name: Build executable with PyInstaller
-        run: pyinstaller --name "Aegis" --onefile --windowed --add-data "icon.ico;." AegisApp.py
+        run: pyinstaller --name "Chimera" --onefile --windowed --add-data "icon.ico;." ChimeraApp.py
 
       # الخطوة 5: رفع الملف التنفيذي الناتج كـ "artifact"
       # هذا ما يسمح لك بتنزيله بعد انتهاء عملية البناء
-      - name: Upload Aegis Executable
+      - name: Upload Chimera Executable
         uses: actions/upload-artifact@v4
         with:
           # اسم الملف الذي سيظهر لك في صفحة التنزيل
-          name: Aegis-Executable
+          name: Chimera-Executable
           # المسار إلى الملف الذي تم إنشاؤه بواسطة PyInstaller
-          path: dist/Aegis.exe
+          path: dist/Chimera.exe
