@@ -23,12 +23,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyinstaller customtkinter cryptography
 
-      # --- بناء البرنامج مع تضمين الأيقونة ---
+      # --- بناء البرنامج مع تضمين الأيقونة بالطريقة الصحيحة ---
       - name: Build executable with PyInstaller
-        run: pyinstaller --name "FileFortress" --onefile --windowed --icon=icon.ico GodModeEncryptor.py
+        run: pyinstaller --name "AegisCrypt" --onefile --windowed --add-data "icon.ico;." AegisCrypt.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: FileFortress-GodMode
-          path: dist/FileFortress.exe
+          name: AegisCrypt-Executable
+          path: dist/AegisCrypt.exe
